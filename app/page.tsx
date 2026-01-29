@@ -94,7 +94,19 @@ export default function FlasherPage() {
     setError(null);
 
     try {
-      const response = await fetch('/firmware.bin');
+      // Fetch latest firmware from GitHub releases
+      const apiUrl = 'https://api.github.com/repos/GhostMicro/micro-NA_Firmware/releases/latest';
+      const releaseRes = await fetch(apiUrl);
+      if (!releaseRes.ok) throw new Error("ไม่สามารถเชื่อมต่อ GitHub ได้");
+      
+      const release = await releaseRes.json();
+      const firmwareAsset = release.assets?.find((asset: any) => asset.name === 'firmware.bin' || asset.name.includes('firmware'));
+      
+      if (!firmwareAsset) throw new Error("ไม่พบไฟล์เฟิร์มแวร์ในรีลีส");
+      
+      addLog(`📦 กำลังดาวน์โหลดเฟิร์มแวร์เวอร์ชั่น ${release.tag_name}...`);
+      
+      const response = await fetch(firmwareAsset.browser_download_url);
       if (!response.ok) throw new Error("ไม่สามารถโหลดไฟล์เฟิร์มแวร์ได้");
       const firmwareBuffer = await response.arrayBuffer();
 
