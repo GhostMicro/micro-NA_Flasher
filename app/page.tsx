@@ -275,11 +275,11 @@ export default function FlasherPage() {
           <Zap className="w-12 h-12 text-blue-400 drop-shadow-[0_0_15px_rgba(59,130,246,0.6)]" />
         </div>
         <h1 className="text-7xl font-black tracking-tight mb-8 bg-gradient-to-r from-blue-400 via-white to-indigo-400 bg-clip-text text-transparent italic leading-[1.1]">
-          NA Framework Flasher
+          NA Firmware Flasher
         </h1>
         <p className="text-slate-400 text-2xl font-light tracking-wide max-w-2xl mx-auto leading-relaxed">
-          ยกระดับหุ่นยนต์ของคุณสู่มาตรฐาน <span className="text-blue-400 font-bold border-b border-blue-500/30 px-2 shadow-blue-500/20 drop-shadow-sm">NA FRAMEWORK</span>
-          <br /><span className="text-[10px] text-slate-600 font-mono font-black uppercase tracking-[0.5em] mt-2 block opacity-60">Navigation Autonomous Framework Deployment</span>
+          ยกระดับหุ่นยนต์ของคุณสู่มาตรฐาน <span className="text-blue-400 font-bold border-b border-blue-500/30 px-2 shadow-blue-500/20 drop-shadow-sm">NA FIRMWARE</span>
+          <br /><span className="text-[10px] text-slate-600 font-mono font-black uppercase tracking-[0.5em] mt-2 block opacity-60">Navigation Autonomous Firmware Deployment</span>
         </p>
       </div>
 

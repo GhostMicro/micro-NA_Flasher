@@ -5,8 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "NA Framework (Navigation Autonomous Framework) | นวัตกรรมหุ่นยนต์แห่งอนาคต",
-  description: "ระบบติดตั้งเฟิร์มแวร์ NA Framework สำหรับ ESP32 ผ่านเว็บเบราว์เซอร์ด้วยความปลอดภัยสูงสุด",
+  title: "NA Firmware (Navigation Autonomous Firmware) | นวัตกรรมหุ่นยนต์แห่งอนาคต",
+  description: "ระบบติดตั้งเฟิร์มแวร์ NA Firmware สำหรับ ESP32 ผ่านเว็บเบราว์เซอร์ด้วยความปลอดภัยสูงสุด",
 };
 
 export default function RootLayout({
