@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "mkdir -p public/firmware_source && cp ../micro-NA_Firmware/docs/assets/firmware/* public/firmware_source/",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

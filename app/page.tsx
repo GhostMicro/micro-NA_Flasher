@@ -125,25 +125,48 @@ export default function FlasherPage() {
 
       const sendCommand = async (cmd: any): Promise<any> => {
         const json = JSON.stringify(cmd) + "\n";
+        addLog(`[Debug] Sending: ${json.trim()}`);
 
-        // Use the underlying device directly
-        const writer = transport.device.writable!.getWriter();
-        await writer.write(encoder.encode(json));
-        writer.releaseLock();
+        if (!transport.device.writable || !transport.device.readable) {
+          throw new Error("Device streams are not available");
+        }
 
-        // Simple line reader with timeout
-        const reader = transport.device.readable!.getReader();
+        // Wait a small bit to ensure no previous operations are pending
+        await new Promise(r => setTimeout(r, 100));
+
+        const writer = transport.device.writable.getWriter();
+        try {
+          await writer.write(encoder.encode(json));
+        } finally {
+          writer.releaseLock();
+        }
+
+        // Delay to allow ESP32 to process and respond
+        await new Promise(r => setTimeout(r, 200));
+
+        const reader = transport.device.readable.getReader();
         let result = "";
         try {
-          const timeout = setTimeout(() => reader.cancel(), 2000);
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            result += decoder.decode(value);
-            if (result.includes('\n')) break;
-          }
-          clearTimeout(timeout);
-          return JSON.parse(result.trim().split('\n')[0]);
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Timeout waiting for response")), 3000)
+          );
+
+          const readPromise = (async () => {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              result += decoder.decode(value);
+              if (result.includes('\n')) break;
+            }
+            return result;
+          })();
+
+          const response = await Promise.race([readPromise, timeoutPromise]) as string;
+          addLog(`[Debug] Received: ${response.trim()}`);
+          return JSON.parse(response.trim().split('\n')[0]);
+        } catch (err: any) {
+          addLog(`[Handshake Error] ${err.message}`);
+          throw err;
         } finally {
           reader.releaseLock();
         }
