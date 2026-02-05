@@ -24,6 +24,8 @@
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "patch-package": "^8.0.1",
+    "postinstall-postinstall": "^2.1.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

@@ -1,0 +1,43 @@
+diff --git a/node_modules/esptool-js/lib/webserial.js b/node_modules/esptool-js/lib/webserial.js
+index 568e22b..782cbcd 100644
+--- a/node_modules/esptool-js/lib/webserial.js
++++ b/node_modules/esptool-js/lib/webserial.js
+@@ -141,20 +141,27 @@ class Transport {
+             return;
+         try {
+             while (true) {
+-                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Read timeout exceeded")), timeout));
+-                // Await the race between the timeout and the reader read
+-                const result = await Promise.race([this.reader.read(), timeoutPromise]);
+-                // If a timeout occurs, result will be null; otherwise, it will have { value, done }
+-                if (result === null)
+-                    break;
+-                const { value, done } = result;
+-                if (done || !value)
+-                    break;
+-                yield value; // Yield each data chunk
++                let timer;
++                const timeoutPromise = new Promise((_, reject) => {
++                    timer = setTimeout(() => reject(new Error("Read timeout exceeded")), timeout || 10000);
++                });
++
++                try {
++                    const result = await Promise.race([this.reader.read(), timeoutPromise]);
++                    if (result === null) break;
++                    const { value, done } = result;
++                    if (done || !value) break;
++                    yield value;
++                } finally {
++                    clearTimeout(timer); // CRITICAL: Prevent timer leak
++                }
+             }
+         }
+         catch (error) {
+-            console.error("Error reading from serial port:", error);
++            if (error.message !== "Read timeout exceeded") {
++                console.error("Error reading from serial port:", error);
++            }
++            throw error; // Re-throw to be handled by caller
+         }
+         finally {
+             this.buffer = new Uint8Array(0);

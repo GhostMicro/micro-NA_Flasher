@@ -15,14 +15,25 @@ import {
   LogOut
 } from 'lucide-react';
 import { ESPLoader, Transport } from 'esptool-js';
+import { SecurityManager } from '../utils/security';
 
 type FlasherStatus = 'idle' | 'connecting' | 'connected' | 'flashing' | 'rebooting' | 'completed' | 'error';
+
+interface FirmwareManifest {
+  name: string;
+  version: string;
+  builds: {
+    chip: string;
+    parts: { address: string; path: string }[];
+  }[];
+}
 
 export default function FlasherPage() {
   const [device, setDevice] = useState<SerialPort | null>(null);
   const [transport, setTransport] = useState<Transport | null>(null);
   const [status, setStatus] = useState<FlasherStatus>('idle');
   const [progress, setProgress] = useState(0);
+  const [isSecure, setIsSecure] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [chipName, setChipName] = useState<string | null>(null);
@@ -62,28 +73,103 @@ export default function FlasherPage() {
         }
       });
 
-      addLog("🔍 กำลังพยายามซิงค์ข้อมูลกับบอร์ด (โปรดรอสักครู่)...");
+      addLog("🔍 กำลังเริ่มกระบวนการ Synchronization...");
+      addLog("💡 Tip: หากค้างที่ขั้นตอนนี้ ให้กดปุ่ม BOOT บนบอร์ดค้างไว้");
 
-      // แก้ไขปัญหา Timeout โดยการหน่วงเวลาการเชื่อมต่อเล็กน้อยเพื่อให้บอร์ดพร้อม
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // ให้เวลาผู้ใช้กดปุ่ม BOOT
+      await new Promise(resolve => setTimeout(resolve, 1500));
 
-      // ใช้ 'default_reset' และพยายามดึงบอร์ดเข้า Bootloader
+      console.log("Attempting ESPLoader.main('default_reset')...");
       const chip = await esploader.main('default_reset');
+      console.log("Sync successful. Detected chip:", chip);
 
       esploaderRef.current = esploader;
       setChipName(chip);
       setDevice(port);
       setTransport(transportInstance);
       setStatus('connected');
-      addLog(`✅ เชื่อมต่อ ${chip} สำเร็จ พร้อมสำหรับการเขียนข้อมูลรักษาความปลอดภัย`);
+      addLog(`✅ เชื่อมต่อ ${chip} สำเร็จ!`);
+
+      // Phase 2: Secure Handshake
+      await performSecureHandshake(transportInstance);
     } catch (err: any) {
-      console.error(err);
-      if (err.message.includes("Read timeout")) {
-        setError("ไม่สามารถติดต่อกับบอร์ดได้ (Timeout): โปรดลองกดปุ่ม BOOT ค้างไว้ขณะกดปุ่มเชื่อมต่อ");
-      } else {
-        setError(err.message || "การเชื่อมต่อข้อยกเว้น");
+      console.error("Connection Error Trace:", err);
+      let errorMsg = err.message || "การเชื่อมต่อข้อยกเว้น";
+
+      if (errorMsg.includes("Failed to open serial port")) {
+        errorMsg = "❌ ไม่สามารถเปิด Serial Port ได้\n\n💡 วิธีแก้สำหรับ Linux:\nรันคำสั่งนี้ใน Terminal เพื่อตั้งค่าสิทธิ์อัตโนมัติ:\n./scripts/setup_linux_permissions.sh\n\n💡 วิธีแก้ทั่วไป:\n1. ปิด IDE/Serial Monitor อื่นๆ\n2. ลองขยับสาย USB\n3. เช็คว่าบอร์ดไม่ได้รันโปรเจกต์อื่นอยู่";
+      } else if (errorMsg.includes("Read timeout") || errorMsg.includes("Timeout")) {
+        errorMsg = "⏱️ บอร์ดไม่ตอบสนอง (Timeout)\n\n💡 วิธีแก้สำหรับ ESP32-WROOM:\n1. กดปุ่ม BOOT ค้างไว้\n2. คลิกปุ่ม 'เชื่อมต่อ' อีกครั้ง\n3. เมื่อหน้าต่างเลือกพอร์ตขึ้นมา ให้เลือกพอร์ตแล้วกด 'Connect'";
       }
+
+      setError(errorMsg);
       setStatus('error');
+      addLog(`❌ Error: ${errorMsg}`);
+    }
+  };
+
+  const performSecureHandshake = async (transport: Transport) => {
+    try {
+      addLog("🔐 เริ่มการแลกเปลี่ยนรหัสรักษาความปลอดภัย (Secure Handshake)...");
+      const security = new SecurityManager();
+
+      // 1. Generate Browser Keys
+      const browserPubKey = await security.generateKeyPair();
+      const browserPubKeyB64 = security.bufferToBase64(browserPubKey);
+
+      // 2. Clear buffers (Wait a bit for ESP32 to finish boot logs)
+      await new Promise(resolve => setTimeout(resolve, 800));
+
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+
+      const sendCommand = async (cmd: any): Promise<any> => {
+        const json = JSON.stringify(cmd) + "\n";
+
+        // Use the underlying device directly
+        const writer = transport.device.writable!.getWriter();
+        await writer.write(encoder.encode(json));
+        writer.releaseLock();
+
+        // Simple line reader with timeout
+        const reader = transport.device.readable!.getReader();
+        let result = "";
+        try {
+          const timeout = setTimeout(() => reader.cancel(), 2000);
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            result += decoder.decode(value);
+            if (result.includes('\n')) break;
+          }
+          clearTimeout(timeout);
+          return JSON.parse(result.trim().split('\n')[0]);
+        } finally {
+          reader.releaseLock();
+        }
+      };
+
+      // Step 1: kx_init
+      addLog("📤 กำลังส่งกุญแจส่วนตัวไปยังบอร์ด...");
+      const initRes = await sendCommand({ c: "kx_init" });
+      if (!initRes || !initRes.ok) throw new Error("kx_init failed or timeout");
+
+      const firmwarePubKeyB64 = initRes.pub;
+      const firmwarePubKey = security.base64ToBuffer(firmwarePubKeyB64);
+
+      // Step 2: kx_fin
+      addLog("📥 กำลังรับกุญแจสาธารณะจากบอร์ด...");
+      const finRes = await sendCommand({ c: "kx_fin", pub: browserPubKeyB64 });
+      if (!finRes || !finRes.ok) throw new Error("kx_fin failed");
+
+      // Step 3: Compute Locally
+      await security.computeSharedSecret(firmwarePubKey);
+
+      addLog("✨ การเชื่อมต่อปลอดภัยสมบูรณ์ (Secure Handshake Verified)");
+      setIsSecure(true);
+    } catch (err: any) {
+      console.warn("Handshake Error:", err);
+      addLog(`⚠️ แจ้งเตือน: ดำเนินการในโหมดปกติ (${err.message})`);
     }
   };
 
@@ -94,34 +180,42 @@ export default function FlasherPage() {
     setError(null);
 
     try {
-      // Fetch latest firmware from GitHub releases
-      const apiUrl = 'https://api.github.com/repos/GhostMicro/micro-NA_Firmware/releases/latest';
-      const releaseRes = await fetch(apiUrl);
-      if (!releaseRes.ok) throw new Error("ไม่สามารถเชื่อมต่อ GitHub ได้");
-      
-      const release = await releaseRes.json();
-      const firmwareAsset = release.assets?.find((asset: any) => asset.name === 'firmware.bin' || asset.name.includes('firmware'));
-      
-      if (!firmwareAsset) throw new Error("ไม่พบไฟล์เฟิร์มแวร์ในรีลีส");
-      
-      addLog(`📦 กำลังดาวน์โหลดเฟิร์มแวร์เวอร์ชั่น ${release.tag_name}...`);
-      
-      const response = await fetch(firmwareAsset.browser_download_url);
-      if (!response.ok) throw new Error("ไม่สามารถโหลดไฟล์เฟิร์มแวร์ได้");
-      const firmwareBuffer = await response.arrayBuffer();
+      addLog("📡 กำลังตรวจสอบเวอร์ชันจาก Manifest System...");
+      const manifestUrl = '/firmware_source/manifest.json';
+      const manifestResponse = await fetch(manifestUrl);
+      if (!manifestResponse.ok) throw new Error("ไม่สามารถโหลด Manifest ได้");
+      const manifest: FirmwareManifest = await manifestResponse.json();
+
+      const build = manifest.builds.find(b => b.chip === 'ESP32');
+      if (!build) throw new Error("ไม่พบ Build สำหรับชิป ESP32 ใน Manifest");
+
+      addLog(`📦 พบเฟิร์มแวร์เวอร์ชัน ${manifest.version} สำหรับ ${manifest.name}`);
 
       const esploader = esploaderRef.current;
+      const flashFiles: { data: string; address: number }[] = [];
 
-      addLog("🚀 เริ่มการ Flash เฟิร์มแวร์ Phase 9...");
+      for (const part of build.parts) {
+        addLog(`📥 กำลังโหลด ${part.path}...`);
 
-      const ui8 = new Uint8Array(firmwareBuffer);
-      const binaryString = esploader.ui8ToBstr(ui8);
+        // Hybrid Logic: Check if path is a full URL or just a filename
+        const isRemote = part.path.startsWith('http://') || part.path.startsWith('https://');
+        const binaryUrl = isRemote ? part.path : `/firmware_source/${part.path}`;
+
+        const binaryResponse = await fetch(binaryUrl);
+        if (!binaryResponse.ok) throw new Error(`ไม่พบไฟล์ ${part.path}`);
+        const buffer = await binaryResponse.arrayBuffer();
+
+        const ui8 = new Uint8Array(buffer);
+        flashFiles.push({
+          data: esploader.ui8ToBstr(ui8),
+          address: parseInt(part.address, 16)
+        });
+      }
+
+      addLog(`🚀 เริ่มการ Flash NA Core [REAL]...`);
 
       await esploader.writeFlash({
-        fileArray: [{
-          data: binaryString,
-          address: 0x10000,
-        }],
+        fileArray: flashFiles,
         flashSize: 'keep',
         flashMode: 'keep',
         flashFreq: 'keep',
@@ -195,6 +289,11 @@ export default function FlasherPage() {
               <div className="flex items-center gap-3">
                 <CheckCircle2 className="w-6 h-6" />
                 <span className="font-bold uppercase text-xs tracking-widest">{chipName} CONNECTED</span>
+                {isSecure && (
+                  <span className="flex items-center gap-1 bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded text-[10px] border border-blue-500/30 animate-pulse">
+                    <Shield className="w-3 h-3" /> SECURE
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => window.location.reload()}
@@ -209,7 +308,7 @@ export default function FlasherPage() {
               className="primary-button flex items-center gap-3 px-10 py-5 rounded-full text-xl font-bold w-full justify-center shadow-lg"
             >
               <UploadCloud className="w-6 h-6" />
-              เริ่มติดตั้งเฟิร์มแวร์ Phase 9
+              เริ่มติดตั้งเฟิร์มแวร์ NA Core
             </button>
           </div>
         );
@@ -258,7 +357,7 @@ export default function FlasherPage() {
                 <p className="text-green-500 font-bold tracking-[0.2em] text-xs uppercase">Device Security Verified</p>
               </div>
               <p className="text-slate-300 text-lg leading-relaxed max-w-sm">
-                บอร์ดของคุณได้รับการติดตั้ง Phase 9 และ <span className="text-blue-400">ปิดการเชื่อมต่อพอร์ต</span> เรียบร้อยแล้ว
+                บอร์ดของคุณได้รับการติดตั้ง NA Core และ <span className="text-blue-400">ปิดการเชื่อมต่อพอร์ต</span> เรียบร้อยแล้ว
               </p>
               <div className="inline-flex items-center gap-2 px-6 py-3 bg-slate-800/50 rounded-2xl border border-slate-700 text-slate-200 font-bold animate-bounce mt-4">
                 <LogOut className="w-5 h-5 text-red-500" />
@@ -341,7 +440,7 @@ export default function FlasherPage() {
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed text-justify relative group">
               <span className="absolute -left-4 top-0 w-1 h-full bg-blue-500/30 rounded-full" />
-              ระบบแฟลชของ Phase 9 ออกแบบมาให้ทำงานบนเครื่องของผู้ใช้อย่างสมบูรณ์ ข้อมูลที่ถูกเขียนลงบนบอร์ดได้รับการตรวจสอบความถูกต้องทุกไบต์ เพื่อป้องกันภัยคุกคามและการเสียหายของฮาร์ดแวร์
+              ระบบแฟลชของ NA Core ออกแบบมาให้ทำงานบนเครื่องของผู้ใช้อย่างสมบูรณ์ ข้อมูลที่ถูกเขียนลงบนบอร์ดได้รับการตรวจสอบความถูกต้องทุกไบต์ เพื่อป้องกันภัยคุกคามและการเสียหายของฮาร์ดแวร์
             </p>
           </div>
 
